@@ -30,14 +30,19 @@ class SharedPathRNN(nn.Module):
         self.W_rh = nn.Linear(self.r_embed_dim, self.r_embed_dim, bias=False)
 
         if self.rnn_type in {'RNN', 'LSTM', 'GRU'}:
-            self.RNN = getattr(nn, self.rnn_type)(input_size=self.r_embed_dim, bias=False, num_layers=1, hidden_size=self.r_embed_dim)
+            self.RNN = getattr(nn, self.rnn_type)(input_size=self.r_embed_dim,
+                                                  bias=False,
+                                                  num_layers=1,
+                                                  hidden_size=self.r_embed_dim)
         else:
-            self.RNN = nn.RNN(input_size=self.r_embed_dim, bias=False, num_layers=1, hidden_size=self.r_embed_dim)
+            self.RNN = nn.RNN(input_size=self.r_embed_dim,
+                              bias=False, num_layers=1,
+                              hidden_size=self.r_embed_dim)
 
     @overrides
     def forward(self,
                 entities: torch.LongTensor,  # [e1, ..., en] : [batch, ent_n]
-                relations: torch.LongTensor): # [s1, ..., sm] : [batch, rel_m]
+                relations: torch.LongTensor) -> torch.FloatTensor: # [s1, ..., sm] : [batch, rel_m]
 
         assert entities.size()[-1] == relations.size()[-1] - 1, "size entity list should match relation list"
 
@@ -59,6 +64,6 @@ class SharedPathRNN(nn.Module):
     def sim_score(self,
                   entities: torch.LongTensor,
                   relations: torch.LongTensor, # [r_embed_dim]
-                  relation: torch.FloatTensor): # [batch, r_embed_dim]
+                  relation: torch.FloatTensor) -> torch.FloatTensor: # [batch, r_embed_dim]
         h_t = self.forward(entities, relations) # [batch, r_embed_dim]
         return torch.bmm(relation.unsqueeze(1), h_t.unsqueeze(2))
