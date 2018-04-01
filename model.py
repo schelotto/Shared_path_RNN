@@ -36,7 +36,8 @@ class SharedPathRNN(nn.Module):
                                                   hidden_size=self.r_embed_dim)
         else:
             self.RNN = nn.RNN(input_size=self.r_embed_dim,
-                              bias=False, num_layers=1,
+                              bias=False,
+                              num_layers=1,
                               hidden_size=self.r_embed_dim)
 
     def sim_score(self,
