@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 from torch.autograd import Variable
+from overrides import overrides
 
 class SharedPathRNN(nn.Module):
     def __init__(self, args):
@@ -33,6 +34,7 @@ class SharedPathRNN(nn.Module):
         else:
             self.RNN = nn.RNN(input_size=self.r_embed_dim, bias=False, num_layers=1, hidden_size=self.r_embed_dim)
 
+    @overrides
     def forward(self,
                 entities: torch.LongTensor,  # [e1, ..., en] : [batch, ent_n]
                 relations: torch.LongTensor): # [s1, ..., sm] : [batch, rel_m]
@@ -43,7 +45,7 @@ class SharedPathRNN(nn.Module):
             entities, relations = entities.cuda(), relations.cuda()
 
         ent_embed = self.e_embedding(entities) # [batch, len_ent, e_embed]
-        rel_embed = self.r_embedding(relations) # [batch, len_ent-1, r_embed]
+        rel_embed = self.r_embedding(relations) # [batch, len_ent - 1, r_embed]
 
         null_to_cat = self.null.repeat(relations.size()[0], 1, 1)
         rel_embed = self.concat([rel_embed, null_to_cat], dim=1)
@@ -56,7 +58,7 @@ class SharedPathRNN(nn.Module):
 
     def sim_score(self,
                   entities: torch.LongTensor,
-                  relations: torch.LongTensor,
+                  relations: torch.LongTensor, # [r_embed_dim]
                   relation: torch.FloatTensor): # [batch, r_embed_dim]
         h_t = self.forward(entities, relations) # [batch, r_embed_dim]
         return torch.bmm(relation.unsqueeze(1), h_t.unsqueeze(2))
