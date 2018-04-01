@@ -40,6 +40,14 @@ class SharedPathRNN(nn.Module):
                               num_layers=1,
                               hidden_size=self.r_embed_dim)
 
+        self.init_params()
+
+    def init_params(self):
+        init_range = 1.0
+        for p in self.modules():
+            if isinstance(p, nn.Embedding) or isinstance(p, nn.Linear):
+                p.weight.data.uniform_(-init_range, init_range)
+
     def sim_score(self,
                   true_relation: torch.FloatTensor,  # [rel_size, r_embed_dim]
                   pred_relation: torch.FloatTensor  # [batch_size, r_embed_dim]
