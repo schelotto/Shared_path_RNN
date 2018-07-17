@@ -4,12 +4,14 @@ from torch.utils.serialization import load_lua
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 
+import _pickle as cPickle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os
 import random
 import warnings
+import time
 
 warnings.filterwarnings("ignore")
 
@@ -61,7 +63,6 @@ class PathRNN(nn.Module):
                                   nn.ReLU(True),
                                   nn.Linear(mlp_hidden, 1))
 
-
     def forward(self, input):
         entity_value = input[:, :, :, 1]
         entity_type = input[:, :, :, 0]
@@ -104,6 +105,7 @@ def load_file(file_name):
 
 def train_files(num_epoch: int = 20):
     print("Start Training...")
+    t0 = time.time()
     for epoch in range(num_epoch):
         global_steps = 0
         step = 0
@@ -127,39 +129,17 @@ def train_files(num_epoch: int = 20):
 
                 model_out = path_rnn(paths)
 
-                """
-
-                pos_idx = torch.nonzero(label.squeeze())
-                neg_idx = torch.nonzero((1 - label).squeeze())
-
-                if pos_idx.size(0) > 0:
-                    pos_agg = -F.sigmoid(model_out[pos_idx].sum(1).log()).log()
-                else:
-                    pos_agg = torch.Tensor([0.0])
-                    if torch.cuda.is_available():
-                        pos_agg = pos_agg.cuda()
-
-                if neg_idx.size(0) > 0:
-                    neg_agg = -(1 - F.sigmoid(model_out[neg_idx].sum(1).log())).log()
-                else:
-                    neg_agg = torch.Tensor([0.0])
-                    if torch.cuda.is_available():
-                        neg_agg = neg_agg.cuda()
-                
-                ce_loss = (pos_agg.sum() + neg_agg.sum()).div(paths.size(0))
-                
-                """
                 ce_loss = F.binary_cross_entropy(F.sigmoid(model_out.sum(1).log()) + 1e-64,
                                                  label.float(),
                                                  size_average=False)
 
-                otho = torch.mm(path_rnn.rf_embedder.weight.t(), path_rnn.rb_embedder.weight)
-                identity = torch.diag(torch.Tensor([1.0] * 50))
+                otho = torch.mm(path_rnn.rf_embedder.weight, path_rnn.rb_embedder.weight.t())
+                identity = torch.diag(torch.Tensor([1.0] * 9))
                 if torch.cuda.is_available():
                     identity = identity.cuda()
                 otho -= identity
 
-                reg_loss = 5 * torch.trace(torch.mm(otho.t(), otho)).sqrt()
+                reg_loss = torch.trace(torch.mm(otho.t(), otho)).sqrt()
 
                 optimzer.zero_grad()
                 (ce_loss.div(paths.size(0)) + reg_loss).backward()
@@ -179,11 +159,36 @@ def train_files(num_epoch: int = 20):
                                                                                            global_steps,
                                                                                            ce_loss_ / step,
                                                                                            reg_loss_ / step), end='\r', flush=True)
-        print("\n")
+        print("Duration: {:.4f}\n".format(time.time() - t0))
         if not os.path.isdir('trained_model'):
             os.mkdir('trained_model')
 
-        torch.save(path_rnn, 'path_rnn_{}.pk'.format(epoch))
+        torch.save(path_rnn, os.path.join('trained_model', 'path_rnn_{}.pt'.format(epoch)))
+
+    print('Start Testing...')
+    for i, file in enumerate(torch_test):
+        test_dset = load_file(file)
+        test_iters = DataLoader(dataset=test_dset,
+                                batch_size=64,
+                                shuffle=False,
+                                num_workers=64,
+                                drop_last=False)
+
+        scores_ = []
+        for paths, label in test_iters:
+
+            if torch.cuda.is_available():
+                paths, label = paths.cuda(), label.cuda()
+
+            model_out = path_rnn(paths)
+            scores = F.sigmoid(model_out.sum(1).log())
+            scores_.append(list(scores.cpu().data.numpy()))
+
+        if not os.path.isdir('predicted_scores'):
+            os.mkdir('predicted_scores')
+
+        with open(os.path.join('predicted_score', file), 'wb') as f:
+            cPickle.dump(scores_, f)
 
 if __name__ == "__main__":
     train_files()
