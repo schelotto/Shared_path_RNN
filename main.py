@@ -169,42 +169,45 @@ def train_files(num_epoch: int = 0):
         torch.save(path_rnn, os.path.join('trained_model', 'path_rnn_{}.pt'.format(epoch)))
 
     print('Start Testing...')
+    path_rnn.eval()
     pos_count = 0
     total_count = 0
 
     for i, file in enumerate(torch_test):
-        if 'part' in file:
-            test_dset = load_file(file)
-            test_iters = DataLoader(dataset=test_dset,
-                                    batch_size=64,
-                                    shuffle=False,
-                                    num_workers=64,
-                                    drop_last=False)
+        test_dset = load_file(file)
+        test_iters = DataLoader(dataset=test_dset,
+                                batch_size=64,
+                                shuffle=False,
+                                num_workers=64,
+                                drop_last=False)
 
-            scores_ = np.array([])
+        scores_ = np.array([])
 
 
-            for paths, label in test_iters:
+        for paths, label in test_iters:
 
-                if torch.cuda.is_available():
-                    paths, label = paths.cuda(), label.cuda()
+            if torch.cuda.is_available():
+                paths, label = paths.cuda(), label.cuda()
 
-                model_out = path_rnn(paths)
-                scores = F.sigmoid(model_out.sum(1).log())
-                scores_ = np.append(scores_, scores.cpu().data.numpy())
-                pos_count += label.sum().data.item()
-                total_count += label.size(0)
+            model_out = path_rnn(paths)
+            scores = F.sigmoid(model_out.sum(1).log())
+            scores_ = np.append(scores_, scores.cpu().data.numpy())
+            pos_count += label.sum().data.item()
+            total_count += label.size(0)
 
-            if not os.path.isdir('predicted_scores'):
-                os.mkdir('predicted_scores')
+        if not os.path.isdir('predicted_scores'):
+            os.mkdir('predicted_scores')
 
-            os.chdir('predicted_scores')
-            predict_file = '.'.join(file.split('/')[-1].split('.')[:-1])
-            with open(predict_file, 'w') as f:
-                for score in scores_:
-                    f.write(str(score) + '\n')
-                    print(file + ' predicted.', end='\r')
-            os.chdir('..')
+        os.chdir('predicted_scores')
+        if 'part' not in file:
+            predict_file = file.split('/')[-1].split('.')[2]
+        else:
+            predict_file = '.'.join(file.split('/')[-1].split('.')[2:4])
+        with open(predict_file, 'w') as f:
+            for score in scores_:
+                f.write(str(score) + '\n')
+                print(file + ' predicted.', end='\r')
+        os.chdir('..')
 
     print('Total positive samples:', pos_count)
     print('Total test samples:', total_count)
