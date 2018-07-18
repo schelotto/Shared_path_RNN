@@ -4,7 +4,7 @@ from torch.utils.serialization import load_lua
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 
-import _pickle as cPickle
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +21,8 @@ torch_test = glob('data/test/*.torch')
 def flip(x, dim):
     indices = [slice(None)] * x.dim()
     indices[dim] = torch.arange(x.size(dim) - 1, -1, -1,
-                                dtype=torch.long, device=x.device)
+                                dtype=torch.long,
+                                device=x.device)
     return x[tuple(indices)]
 
 class PathRNN(nn.Module):
@@ -98,12 +99,14 @@ path_rnn = PathRNN(entity_vocab_size=11464,
 if torch.cuda.is_available():
     path_rnn = path_rnn.cuda()
 
+path_rnn = torch.load('trained_model/path_rnn_19.pt')
+
 def load_file(file_name):
     train_tensor = load_lua(file_name)
     train_dataset = TensorDataset(train_tensor['data'].long() - 1, train_tensor['labels'])
     return train_dataset
 
-def train_files(num_epoch: int = 20):
+def train_files(num_epoch: int = 0):
     print("Start Training...")
     t0 = time.time()
     for epoch in range(num_epoch):
@@ -166,29 +169,45 @@ def train_files(num_epoch: int = 20):
         torch.save(path_rnn, os.path.join('trained_model', 'path_rnn_{}.pt'.format(epoch)))
 
     print('Start Testing...')
+    pos_count = 0
+    total_count = 0
+
     for i, file in enumerate(torch_test):
-        test_dset = load_file(file)
-        test_iters = DataLoader(dataset=test_dset,
-                                batch_size=64,
-                                shuffle=False,
-                                num_workers=64,
-                                drop_last=False)
+        if 'part' in file:
+            test_dset = load_file(file)
+            test_iters = DataLoader(dataset=test_dset,
+                                    batch_size=64,
+                                    shuffle=False,
+                                    num_workers=64,
+                                    drop_last=False)
 
-        scores_ = []
-        for paths, label in test_iters:
+            scores_ = np.array([])
 
-            if torch.cuda.is_available():
-                paths, label = paths.cuda(), label.cuda()
 
-            model_out = path_rnn(paths)
-            scores = F.sigmoid(model_out.sum(1).log())
-            scores_.append(list(scores.cpu().data.numpy()))
+            for paths, label in test_iters:
 
-        if not os.path.isdir('predicted_scores'):
-            os.mkdir('predicted_scores')
+                if torch.cuda.is_available():
+                    paths, label = paths.cuda(), label.cuda()
 
-        with open(os.path.join('predicted_score', file), 'wb') as f:
-            cPickle.dump(scores_, f)
+                model_out = path_rnn(paths)
+                scores = F.sigmoid(model_out.sum(1).log())
+                scores_ = np.append(scores_, scores.cpu().data.numpy())
+                pos_count += label.sum().data.item()
+                total_count += label.size(0)
+
+            if not os.path.isdir('predicted_scores'):
+                os.mkdir('predicted_scores')
+
+            os.chdir('predicted_scores')
+            predict_file = '.'.join(file.split('/')[-1].split('.')[:-1])
+            with open(predict_file, 'w') as f:
+                for score in scores_:
+                    f.write(str(score) + '\n')
+                    print(file + ' predicted.', end='\r')
+            os.chdir('..')
+
+    print('Total positive samples:', pos_count)
+    print('Total test samples:', total_count)
 
 if __name__ == "__main__":
     train_files()
