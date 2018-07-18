@@ -4,12 +4,14 @@ from torch.utils.serialization import load_lua
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os
 import random
 import warnings
+import time
 
 warnings.filterwarnings("ignore")
 
@@ -19,7 +21,8 @@ torch_test = glob('data/test/*.torch')
 def flip(x, dim):
     indices = [slice(None)] * x.dim()
     indices[dim] = torch.arange(x.size(dim) - 1, -1, -1,
-                                dtype=torch.long, device=x.device)
+                                dtype=torch.long,
+                                device=x.device)
     return x[tuple(indices)]
 
 class PathRNN(nn.Module):
@@ -61,7 +64,6 @@ class PathRNN(nn.Module):
                                   nn.ReLU(True),
                                   nn.Linear(mlp_hidden, 1))
 
-
     def forward(self, input):
         entity_value = input[:, :, :, 1]
         entity_type = input[:, :, :, 0]
@@ -97,13 +99,16 @@ path_rnn = PathRNN(entity_vocab_size=11464,
 if torch.cuda.is_available():
     path_rnn = path_rnn.cuda()
 
+path_rnn = torch.load('trained_model/path_rnn_19.pt')
+
 def load_file(file_name):
     train_tensor = load_lua(file_name)
     train_dataset = TensorDataset(train_tensor['data'].long() - 1, train_tensor['labels'])
     return train_dataset
 
-def train_files(num_epoch: int = 20):
+def train_files(num_epoch: int = 0):
     print("Start Training...")
+    t0 = time.time()
     for epoch in range(num_epoch):
         global_steps = 0
         step = 0
@@ -127,39 +132,17 @@ def train_files(num_epoch: int = 20):
 
                 model_out = path_rnn(paths)
 
-                """
-
-                pos_idx = torch.nonzero(label.squeeze())
-                neg_idx = torch.nonzero((1 - label).squeeze())
-
-                if pos_idx.size(0) > 0:
-                    pos_agg = -F.sigmoid(model_out[pos_idx].sum(1).log()).log()
-                else:
-                    pos_agg = torch.Tensor([0.0])
-                    if torch.cuda.is_available():
-                        pos_agg = pos_agg.cuda()
-
-                if neg_idx.size(0) > 0:
-                    neg_agg = -(1 - F.sigmoid(model_out[neg_idx].sum(1).log())).log()
-                else:
-                    neg_agg = torch.Tensor([0.0])
-                    if torch.cuda.is_available():
-                        neg_agg = neg_agg.cuda()
-                
-                ce_loss = (pos_agg.sum() + neg_agg.sum()).div(paths.size(0))
-                
-                """
                 ce_loss = F.binary_cross_entropy(F.sigmoid(model_out.sum(1).log()) + 1e-64,
                                                  label.float(),
                                                  size_average=False)
 
-                otho = torch.mm(path_rnn.rf_embedder.weight.t(), path_rnn.rb_embedder.weight)
-                identity = torch.diag(torch.Tensor([1.0] * 50))
+                otho = torch.mm(path_rnn.rf_embedder.weight, path_rnn.rb_embedder.weight.t())
+                identity = torch.diag(torch.Tensor([1.0] * 9))
                 if torch.cuda.is_available():
                     identity = identity.cuda()
                 otho -= identity
 
-                reg_loss = 5 * torch.trace(torch.mm(otho.t(), otho)).sqrt()
+                reg_loss = torch.trace(torch.mm(otho.t(), otho)).sqrt()
 
                 optimzer.zero_grad()
                 (ce_loss.div(paths.size(0)) + reg_loss).backward()
@@ -179,11 +162,52 @@ def train_files(num_epoch: int = 20):
                                                                                            global_steps,
                                                                                            ce_loss_ / step,
                                                                                            reg_loss_ / step), end='\r', flush=True)
-        print("\n")
+        print("Duration: {:.4f}\n".format(time.time() - t0))
         if not os.path.isdir('trained_model'):
             os.mkdir('trained_model')
 
-        torch.save(path_rnn, 'path_rnn_{}.pk'.format(epoch))
+        torch.save(path_rnn, os.path.join('trained_model', 'path_rnn_{}.pt'.format(epoch)))
+
+    print('Start Testing...')
+    pos_count = 0
+    total_count = 0
+
+    for i, file in enumerate(torch_test):
+        if 'part' in file:
+            test_dset = load_file(file)
+            test_iters = DataLoader(dataset=test_dset,
+                                    batch_size=64,
+                                    shuffle=False,
+                                    num_workers=64,
+                                    drop_last=False)
+
+            scores_ = np.array([])
+
+
+            for paths, label in test_iters:
+
+                if torch.cuda.is_available():
+                    paths, label = paths.cuda(), label.cuda()
+
+                model_out = path_rnn(paths)
+                scores = F.sigmoid(model_out.sum(1).log())
+                scores_ = np.append(scores_, scores.cpu().data.numpy())
+                pos_count += label.sum().data.item()
+                total_count += label.size(0)
+
+            if not os.path.isdir('predicted_scores'):
+                os.mkdir('predicted_scores')
+
+            os.chdir('predicted_scores')
+            predict_file = '.'.join(file.split('/')[-1].split('.')[:-1])
+            with open(predict_file, 'w') as f:
+                for score in scores_:
+                    f.write(str(score) + '\n')
+                    print(file + ' predicted.', end='\r')
+            os.chdir('..')
+
+    print('Total positive samples:', pos_count)
+    print('Total test samples:', total_count)
 
 if __name__ == "__main__":
     train_files()
